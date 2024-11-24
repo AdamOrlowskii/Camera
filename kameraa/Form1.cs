@@ -194,7 +194,7 @@ namespace kameraa
                 videoWriter = null;
             }
         }
-        private void SetTrackBarProperties()
+        private void SetTrackBarProperties() // Ustawienie wartości suwaków
         {
             trackBar1.Maximum = 255;
             trackBar2.Maximum = 255;
@@ -209,7 +209,7 @@ namespace kameraa
             trackBar3.TickFrequency = 5;
         }
 
-        private Bitmap previousFrame = null;          // poprzednia klatka potrzebna do wykrywania ruchu
+        private Bitmap previousFrame = null;          // Poprzednia klatka potrzebna do wykrywania ruchu
 
         private bool DetectMotion(Bitmap currentFrame, Bitmap previousFrame)
         {
@@ -218,10 +218,10 @@ namespace kameraa
                 return false;
             }
 
-            int motionPixels = 0; // licznik pikseli wskazujących ruch
-            int grid = 30; // co ile pikseli analizować (większy = mniej szczegółowe, szybsze)
-            int motionThreshold = 50; // minimalna różnica kolorów, by uznać piksel za "ruchomy"
-            double motionPercentThreshold = 10.0; // minimalny procent pikseli wskazujących ruch
+            int motionPixels = 0; // Licznik pikseli wskazujących ruch
+            int grid = 30; // Co ile pikseli analizować (większy = mniej szczegółowe, szybsze)
+            int motionThreshold = 50; // Minimalna różnica kolorów, by uznać piksel za "ruchomy"
+            double motionPercentThreshold = 10.0; // Minimalny procent pikseli wskazujących ruch
 
             // Iteracja po pikselach w siatce
             for (int y = 0; y < previousFrame.Height; y += grid)
