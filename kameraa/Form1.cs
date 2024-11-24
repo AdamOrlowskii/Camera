@@ -1,20 +1,13 @@
-﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
-using System.Drawing;
-using System.Drawing.Imaging;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using System.Windows.Forms;
-using Accord.Video.FFMPEG;
+﻿using Accord.Video.FFMPEG;
 using AForge;
 using AForge.Imaging.Filters;
 using AForge.Video;
 using AForge.Video.DirectShow;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement;
-// DETEKCJA RUCHU MA BYĆ REGULOWANA BO 2 KLATKI ZAWSZE BĘDĄ RÓŻNE, NO I KOLORY DODAĆ
+using AForge.Vision.Motion;
+using System;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Windows.Forms;
 
 namespace kameraa
 {
@@ -32,7 +25,18 @@ namespace kameraa
         {
             InitializeComponent();
             LoadAvailableCameras();
+
+            pictureBox1.Visible = true;
+            pictureBox1.BringToFront();
+
+            motionDetector = new MotionDetector(
+            new TwoFramesDifferenceDetector(), // Algorytm detekcji ruchu
+            new MotionAreaHighlighting()       // Opcjonalne podświetlenie obszaru ruchu
+            );
+            SetTrackBarProperties();
+
         }
+
         private void LoadAvailableCameras() // Funkcja ładująca listę kamer do okienka rozwijanej listy
         {
             videoDevices = new FilterInfoCollection(FilterCategory.VideoInputDevice); // Pobranie listy kamer
@@ -53,22 +57,60 @@ namespace kameraa
         }
 
 
+        AForge.Vision.Motion.MotionDetector motionDetector = null;
+
         private void video_NewFrame(object sender, NewFrameEventArgs eventArgs)
         {
-
             Bitmap bitmap = (Bitmap)eventArgs.Frame.Clone();
-            pictureBoxDisplay.Image = ApplyRGBFilter(bitmap);
 
-            if (pictureBoxDisplay.Image != null)
+            bool isMotionDetected = false;
+
+            if (previousFrame != null)
             {
-                pictureBoxDisplay.Image.Dispose();
+                isMotionDetected = DetectMotion(bitmap, previousFrame);
             }
 
-            pictureBoxDisplay.Image = (Bitmap)bitmap.Clone();
-
-            if (isRecording && videoWriter != null) // KONIECZNIE IF A NIE WHILE
+            if (isMotionDetected)
             {
-                videoWriter.WriteVideoFrame((Bitmap)bitmap.Clone());
+                this.Invoke(new Action(() =>
+                {
+                    labelMotionDetected.Text = "Wykryto ruch";
+                    labelMotionDetected.ForeColor = Color.Red;
+                }));
+            }
+            else
+            {
+                this.Invoke(new Action(() =>
+                {
+                    labelMotionDetected.Text = "Brak ruchu";
+                    labelMotionDetected.ForeColor = Color.Green;
+                }));
+            }
+
+            // Zapis biezacej klatki jako poprzedniej
+            if (previousFrame != null)
+            {
+                previousFrame.Dispose();
+            }
+            previousFrame = (Bitmap)bitmap.Clone();
+
+            BrightnessCorrection br = new BrightnessCorrection(brightness);
+            bitmap = br.Apply((Bitmap)bitmap.Clone());
+            ContrastCorrection cr = new ContrastCorrection(contrast);
+            bitmap = cr.Apply((Bitmap)bitmap.Clone());
+            SaturationCorrection sr = new SaturationCorrection(saturation);
+            bitmap = sr.Apply((Bitmap)bitmap.Clone());
+
+            if (pictureBox1.Image != null)
+            {
+                pictureBox1.Image.Dispose();
+            }
+
+            pictureBox1.Image = (Bitmap)bitmap.Clone();
+
+            if (isRecording && videoWriter != null)
+            {
+                videoWriter.WriteVideoFrame(bitmap);
             }
         }
 
@@ -92,9 +134,9 @@ namespace kameraa
 
         private void buttonCapture_Click(object sender, EventArgs e)
         {
-            if (pictureBoxDisplay.Image != null)
+            if (pictureBox1.Image != null)
             {
-                Bitmap image = new Bitmap(pictureBoxDisplay.Image);
+                Bitmap image = new Bitmap(pictureBox1.Image);
                 image.Save(@"C:\Users\aorlo\Desktop\photo.png", ImageFormat.Png);
                 image.Dispose();
             }
@@ -109,15 +151,6 @@ namespace kameraa
         {
 
         }
-        protected override void OnFormClosing(FormClosingEventArgs e)
-        {
-            if (videoSource != null && videoSource.IsRunning)
-            {
-                videoSource.SignalToStop();
-                videoSource.WaitForStop();
-            }
-            base.OnFormClosing(e);
-        }
 
         private void buttonDisconnect_Click(object sender, EventArgs e)
         {
@@ -125,22 +158,31 @@ namespace kameraa
             {
                 videoSource.SignalToStop();
                 videoSource.WaitForStop();
-                videoSource = null;
-                pictureBoxDisplay.Image = null;
+            }
+            if (isRecording)
+            {
+                isRecording = false;
+                videoWriter?.Close();
+                videoWriter = null;
+            }
+            if (previousFrame != null)
+            {
+                previousFrame.Dispose();
+                previousFrame = null;
             }
         }
 
         private void buttonRecord_Click(object sender, EventArgs e)
         {
-                if (!isRecording)
-                {
-                    string videoFilePath = @"C:\Users\aorlo\Desktop\video.avi";
+            if (!isRecording)
+            {
+                string videoFilePath = @"C:\Users\aorlo\Desktop\video.avi";
 
-                    videoWriter = new VideoFileWriter();
-                    videoWriter.Open(videoFilePath, 450, 300);
+                videoWriter = new VideoFileWriter();
+                videoWriter.Open(videoFilePath, 450, 300);
 
-                    isRecording = true;
-                }
+                isRecording = true;
+            }
         }
 
         private void buttonStopRecording_Click(object sender, EventArgs e)
@@ -162,34 +204,85 @@ namespace kameraa
             trackBar2.Minimum = 0;
             trackBar3.Minimum = 0;
 
-            trackBar1.TickFrequency = 3;
-            trackBar2.TickFrequency = 3;
-            trackBar3.TickFrequency = 3;
+            trackBar1.TickFrequency = 5;
+            trackBar2.TickFrequency = 5;
+            trackBar3.TickFrequency = 5;
         }
 
-        private Bitmap ApplyRGBFilter(Bitmap sourceImage)
+        private Bitmap previousFrame = null;          // poprzednia klatka potrzebna do wykrywania ruchu
+
+        private bool DetectMotion(Bitmap currentFrame, Bitmap previousFrame)
         {
-            ColorFiltering filter = new ColorFiltering();
-            filter.Red = new IntRange(0, red);      
-            filter.Green = new IntRange(0, green);  
-            filter.Blue = new IntRange(0, blue);    
-            Bitmap processedImage = filter.Apply(sourceImage);
-            return processedImage;
+            if (previousFrame == null || currentFrame == null)
+            {
+                return false;
+            }
+
+            int motionPixels = 0; // licznik pikseli wskazujących ruch
+            int grid = 30; // co ile pikseli analizować (większy = mniej szczegółowe, szybsze)
+            int motionThreshold = 50; // minimalna różnica kolorów, by uznać piksel za "ruchomy"
+            double motionPercentThreshold = 10.0; // minimalny procent pikseli wskazujących ruch
+
+            // Iteracja po pikselach w siatce
+            for (int y = 0; y < previousFrame.Height; y += grid)
+            {
+                for (int x = 0; x < previousFrame.Width; x += grid)
+                {
+                    // Pobierz kolory pikseli
+                    Color pixelCurrent = currentFrame.GetPixel(x, y);
+                    Color pixelPrevious = previousFrame.GetPixel(x, y);
+
+                    // Oblicz różnicę dla każdego kanału RGB
+                    int diffR = Math.Abs(pixelCurrent.R - pixelPrevious.R);
+                    int diffG = Math.Abs(pixelCurrent.G - pixelPrevious.G);
+                    int diffB = Math.Abs(pixelCurrent.B - pixelPrevious.B);
+
+                    int totalDifference = diffR + diffG + diffB;
+
+                    // Jeśli różnica przekracza próg, uznaj piksel za ruchomy
+                    if (totalDifference > motionThreshold)
+                    {
+                        motionPixels++;
+                    }
+                }
+            }
+
+            // Oblicz procent pikseli wskazujących ruch
+            double motionPercent = (double)motionPixels /
+                ((previousFrame.Width / grid) * (previousFrame.Height / grid)) * 100;
+
+            // Zwróć true jeśli ruch przekroczył próg procentowy
+            return motionPercent > motionPercentThreshold;
         }
+
 
         private void trackBarRed_Scroll(object sender, EventArgs e)
         {
-            red = trackBar1.Value;
+            brightness = trackBar1.Value;
         }
 
         private void trackBarGreen_Scroll(object sender, EventArgs e)
         {
-            green = trackBar1.Value;
+            saturation = trackBar2.Value;
         }
 
         private void trackBarBlue_Scroll(object sender, EventArgs e)
         {
-            blue = trackBar1.Value;
+            contrast = trackBar3.Value;
+        }
+
+        public int brightness = 0;
+        public int contrast = 0;
+        public int saturation = 0;
+
+        private void labelMotionDetected_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void Form1_Load(object sender, EventArgs e)
+        {
+
         }
     }
 }
